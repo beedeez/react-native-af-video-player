@@ -7,6 +7,7 @@ import {
 	Dimensions,
 	BackHandler,
 	Animated,
+	SafeAreaView,
 	Image,
 	Alert
 } from 'react-native';
@@ -79,6 +80,7 @@ class Video extends Component {
 		};
 		this.animInline = new Animated.Value(Win.width * 0.5625);
 		this.animFullscreen = new Animated.Value(Win.width * 0.5625);
+		this.animFullscreenWidth = new Animated.Value(Win.width);
 		this.BackHandler = this.BackHandler.bind(this);
 		this.onRotated = this.onRotated.bind(this);
 	}
@@ -124,7 +126,7 @@ class Video extends Component {
 					if (this.props.fullScreenOnly) {
 						this.setState({ fullScreen: true }, () => {
 							this.props.onFullScreen(this.state.fullScreen);
-							this.animToFullscreen(Win.height);
+							this.animToFullscreen(Win.height, Win.width);
 							if (this.props.rotateToFullScreen) Orientation.lockToLandscape();
 						});
 					}
@@ -149,19 +151,27 @@ class Video extends Component {
 	}
 
 	onRotated({ window }) {
+		const { width: fullWidth, height: fullHeight } = window;
+		const orientation = fullWidth > fullHeight ? 'LANDSCAPE' : 'PORTRAIT';
+
 		const Win = {
-			height: window.height - getBottomSpace() - getStatusBarHeight() - 40,
-			width: window.width
+			height:
+				orientation === 'LANDSCAPE'
+					? window.height - getBottomSpace()
+					: window.height - getBottomSpace() - getStatusBarHeight() - 40,
+			width:
+				orientation === 'LANDSCAPE'
+					? window.width - getBottomSpace() - getStatusBarHeight() - 10
+					: window.width
 		};
 		const { width, height } = Win;
 
 		// Add this condition incase if inline and fullscreen options are turned on
 		if (this.props.inlineOnly) return;
-		const orientation = width > height ? 'LANDSCAPE' : 'PORTRAIT';
 		if (this.props.rotateToFullScreen) {
 			if (orientation === 'LANDSCAPE') {
 				this.setState({ fullScreen: true }, () => {
-					this.animToFullscreen(height);
+					this.animToFullscreen(height, width);
 					this.props.onFullScreen(this.state.fullScreen);
 				});
 				return;
@@ -184,7 +194,7 @@ class Video extends Component {
 		} else {
 			this.animToInline();
 		}
-		if (this.state.fullScreen) this.animToFullscreen(height);
+		if (this.state.fullScreen) this.animToFullscreen(height, width);
 	}
 
 	onSeekRelease(percent) {
@@ -260,7 +270,9 @@ class Video extends Component {
 							const initialOrient = Orientation.getInitialOrientation();
 							const height =
 								orientation !== initialOrient ? Win.width : Win.height;
-							this.animToFullscreen(height);
+							const width =
+								orientation !== initialOrient ? Win.height : Win.width;
+							this.animToFullscreen(height, width);
 							if (this.props.rotateToFullScreen) Orientation.lockToLandscape();
 						});
 					}
@@ -278,9 +290,10 @@ class Video extends Component {
 				if (this.state.fullScreen) {
 					const initialOrient = Orientation.getInitialOrientation();
 					const height = orientation !== initialOrient ? Win.width : Win.height;
+					const width = orientation !== initialOrient ? Win.height : Win.width;
 					this.props.onFullScreen(this.state.fullScreen);
 					if (this.props.rotateToFullScreen) Orientation.lockToLandscape();
-					this.animToFullscreen(height);
+					this.animToFullscreen(height, width);
 				} else {
 					if (this.props.fullScreenOnly) {
 						this.setState({ paused: true }, () =>
@@ -299,19 +312,27 @@ class Video extends Component {
 		});
 	}
 
-	animToFullscreen(height) {
+	animToFullscreen(height, width) {
 		Animated.parallel([
 			Animated.timing(this.animFullscreen, { toValue: height, duration: 200 }),
+			Animated.timing(this.animFullscreenWidth, {
+				toValue: width,
+				duration: 200
+			}),
 			Animated.timing(this.animInline, { toValue: height, duration: 200 })
 		]).start();
 	}
 
-	animToInline(height) {
+	animToInline(height, width) {
 		const newHeight = height || this.state.inlineHeight;
 		Animated.parallel([
 			Animated.timing(this.animFullscreen, {
 				toValue: newHeight,
 				duration: 100
+			}),
+			Animated.timing(this.animFullscreenWidth, {
+				toValue: width,
+				duration: 200
 			}),
 			Animated.timing(this.animInline, {
 				toValue: this.state.inlineHeight,
@@ -412,71 +433,80 @@ class Video extends Component {
 			...theme
 		};
 
+		const constraintsHeightOnFullScreen = {
+			height: this.animFullscreen,
+			width: this.animFullscreenWidth
+		};
+		const animatedViewStyle = [
+			styles.background,
+			fullScreen
+				? (styles.fullScreen, constraintsHeightOnFullScreen)
+				: { height: this.animInline },
+			fullScreen ? null : style
+		];
+		const safeAreaStyle = { flex: 1 };
+		if (fullScreen) {
+			safeAreaStyle.alignItems = 'center';
+		}
 		return (
-			<Animated.View
-				style={[
-					styles.background,
-					fullScreen
-						? (styles.fullScreen, { height: this.animFullscreen })
-						: { height: this.animInline },
-					fullScreen ? null : style
-				]}
-			>
-				<StatusBar hidden={fullScreen} />
-				{((loading && placeholder) || currentTime < 0.01) && (
-					<Image
-						resizeMode="cover"
-						style={styles.image}
-						{...checkSource(placeholder)}
+			<SafeAreaView style={safeAreaStyle}>
+				<Animated.View style={animatedViewStyle}>
+					<StatusBar hidden={fullScreen} />
+					{((loading && placeholder) || currentTime < 0.01) && (
+						<Image
+							resizeMode="cover"
+							style={styles.image}
+							{...checkSource(placeholder)}
+						/>
+					)}
+					<VideoPlayer
+						{...checkSource(url)}
+						paused={paused}
+						resizeMode={resizeMode}
+						repeat={loop}
+						style={fullScreen ? styles.fullScreen : inline}
+						ref={(ref) => {
+							this.player = ref;
+						}}
+						rate={rate}
+						volume={volume}
+						muted={muted}
+						playInBackground={playInBackground} // Audio continues to play when app entering background.
+						playWhenInactive={playWhenInactive} // [iOS] Video continues to play when control or notification center are shown.
+						// progressUpdateInterval={250.0}          // [iOS] Interval to fire onProgress (default to ~250ms)
+						onLoadStart={() => this.onLoadStart()} // Callback when video starts to load
+						onLoad={(e) => this.onLoad(e)} // Callback when video loads
+						onProgress={(e) => this.progress(e)} // Callback every ~250ms with currentTime
+						onEnd={() => this.onEnd()}
+						onError={(e) => this.onError(e)}
+						// onBuffer={() => this.onBuffer()} // Callback when remote video is buffering
+						onTimedMetadata={(e) => onTimedMetadata(e)} // Callback when the stream receive some metadata
 					/>
-				)}
-				<VideoPlayer
-					{...checkSource(url)}
-					paused={paused}
-					resizeMode={resizeMode}
-					repeat={loop}
-					style={fullScreen ? styles.fullScreen : inline}
-					ref={(ref) => {
-						this.player = ref;
-					}}
-					rate={rate}
-					volume={volume}
-					muted={muted}
-					playInBackground={playInBackground} // Audio continues to play when app entering background.
-					playWhenInactive={playWhenInactive} // [iOS] Video continues to play when control or notification center are shown.
-					// progressUpdateInterval={250.0}          // [iOS] Interval to fire onProgress (default to ~250ms)
-					onLoadStart={() => this.onLoadStart()} // Callback when video starts to load
-					onLoad={(e) => this.onLoad(e)} // Callback when video loads
-					onProgress={(e) => this.progress(e)} // Callback every ~250ms with currentTime
-					onEnd={() => this.onEnd()}
-					onError={(e) => this.onError(e)}
-					// onBuffer={() => this.onBuffer()} // Callback when remote video is buffering
-					onTimedMetadata={(e) => onTimedMetadata(e)} // Callback when the stream receive some metadata
-				/>
-				<Controls
-					ref={(ref) => {
-						this.controls = ref;
-					}}
-					toggleMute={() => this.toggleMute()}
-					toggleFS={() => this.toggleFS()}
-					togglePlay={() => this.togglePlay()}
-					paused={paused}
-					muted={muted}
-					fullscreen={fullScreen}
-					loading={loading}
-					onSeek={(val) => this.seek(val)}
-					onSeekRelease={(pos) => this.onSeekRelease(pos)}
-					progress={progress}
-					currentTime={currentTime}
-					duration={duration}
-					logo={logo}
-					title={title}
-					more={!!onMorePress}
-					onMorePress={() => onMorePress()}
-					theme={setTheme}
-					inlineOnly={inlineOnly}
-				/>
-			</Animated.View>
+					<Controls
+						ref={(ref) => {
+							this.controls = ref;
+						}}
+						toggleMute={() => this.toggleMute()}
+						toggleFS={() => this.toggleFS()}
+						togglePlay={() => this.togglePlay()}
+						paused={paused}
+						muted={muted}
+						fullscreen={fullScreen}
+						loading={loading}
+						onSeek={(val) => this.seek(val)}
+						onSeekRelease={(pos) => this.onSeekRelease(pos)}
+						progress={progress}
+						currentTime={currentTime}
+						duration={duration}
+						logo={logo}
+						title={title}
+						more={!!onMorePress}
+						onMorePress={() => onMorePress()}
+						theme={setTheme}
+						inlineOnly={inlineOnly}
+					/>
+				</Animated.View>
+			</SafeAreaView>
 		);
 	}
 
